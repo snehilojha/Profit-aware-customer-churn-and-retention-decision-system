@@ -1,7 +1,5 @@
 # Profit-aware-customer-churn-and-retention-decision-system
-Customer churn modeling is widely practiced, but most implementations stop at predicting churn risk. This project builds a decision-oriented churn system that predicts when customers will churn, estimates their future economic value, and prescribes profit-optimal retention actions under cost and uncertainty constraints.
-
-The system mirrors how churn analytics is applied in real production environments—where budgets are limited and decisions must be justified in financial terms.
+This project builds a profit-aware customer churn decision system that predicts when customers are likely to churn, estimates their remaining lifetime value, and recommends financially optimal retention actions under budget constraints.
 
 # Problem Statement
 Retention actions (discounts, incentives, support) are costly and cannot be applied to all at-risk customers.
