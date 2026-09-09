@@ -1,15 +1,60 @@
-# Profit-Aware Time-to-Churn & Retention Decision System
+# Profit-Aware Customer Churn & Retention Decision System
 
-Most churn projects predict **who** will churn. This one asks three harder questions:
+This project builds a profit-aware customer churn decision system that predicts *when*
+customers are likely to churn, estimates their lifetime value, and recommends
+financially optimal retention actions under budget constraints.
 
-1. **When** is a customer likely to churn? (survival analysis, not binary classification)
-2. **What is that customer worth?** (forward-looking CLV from predicted lifetime)
-3. **Is intervening profitable?** (expected-value targeting against a retention budget)
+Built on the Telco Customer Churn dataset (7,043 customers) using Kaplan-Meier survival
+curves and Cox Proportional Hazards.
 
-Built on the Telco Customer Churn dataset (7,043 customers) using Cox Proportional
-Hazards and Kaplan-Meier survival curves.
+## Problem Statement
 
----
+Retention actions (discounts, incentives, support) are costly and cannot be applied to
+all at-risk customers.
+
+### Key business question
+
+**Which customers should be targeted for retention to maximize expected business value?**
+
+This requires answering three questions:
+
+1. When is a customer likely to churn?
+2. How valuable is the customer if retained?
+3. Is intervention economically justified?
+
+## Solution Design
+
+**1. Time-to-Churn Modeling (Survival Analysis)**
+
+- Reframed churn as a time-to-event problem instead of binary classification
+- Modeled churn dynamics using Cox Proportional Hazards
+- Generated individual survival curves, short-term churn risk (3-6 months), and
+  expected customer lifetime
+
+This enables early-warning churn detection, not just retrospective prediction.
+
+**2. Forward-Looking Customer Lifetime Value (CLV)**
+
+- Estimated CLV from predicted lifetime:  `CLV = Monthly Revenue x Expected Lifetime`
+- Differentiates high-risk/low-value from high-risk/high-value customers requiring
+  immediate attention
+
+*(Note: the current implementation uses total rather than remaining lifetime — see
+limitation 4 below.)*
+
+**3. Profit-Aware Retention Decision Engine**
+
+Retention decisions are optimized using expected value, not churn probability:
+
+```
+Expected Net Value = (CLV x P(Retention Success)) - Retention Cost
+```
+
+- Retention is applied only when expected net value is positive
+- Explicitly models intervention cost, uncertain success probability, and customer
+  heterogeneity
+
+This converts churn analytics into a prescriptive decision system.
 
 ## Setup
 
@@ -42,11 +87,11 @@ customer_churn/
 └── README.md
 ```
 
-Only the raw CSV is tracked. The two derived files are regenerated on every run and
-are deliberately gitignored — a previously committed copy of `survival_df_encoded.csv`
-had gone stale against the code that produces it.
+Only the raw CSV is tracked. The two derived files are regenerated on every run and are
+deliberately gitignored — a previously committed copy of `survival_df_encoded.csv` had
+gone stale against the code that produces it.
 
-## Method
+## Implementation
 
 | Stage | Approach |
 |---|---|
@@ -55,15 +100,6 @@ had gone stale against the code that produces it.
 | Diagnostics | Schoenfeld residual tests via `check_assumptions()` |
 | Valuation | CLV = Monthly Revenue x predicted lifetime |
 | Decision | Target when `(CLV x P(retention success)) - retention cost > 0` |
-
-## Findings
-
-- Churn is concentrated in the **first ~10 months** of tenure; retention spend should
-  be front-loaded in the customer lifecycle.
-- **Month-to-month contracts** churn dramatically earlier than one- or two-year contracts.
-- **Electronic check** users churn faster than auto-pay users.
-- High churn risk does **not** imply high business value — risk-ranked targeting spends
-  budget on customers who aren't worth saving.
 
 ## Current model scores
 
@@ -81,6 +117,16 @@ column shows a train/test split does not fix that — the leaked signal is insid
 so it survives the split. Only removing the offending features changes the picture.
 
 Dataset: 7,043 customers, 1,869 churn events (26.5%), 5,174 right-censored.
+
+## Key Findings
+
+- Churn risk is strongly time-dependent, concentrated in the **first ~10 months** of
+  tenure; retention spend should be front-loaded in the customer lifecycle.
+- **Month-to-month contracts** churn dramatically earlier than one- or two-year contracts.
+- **Electronic check** users churn faster than auto-pay users.
+- High churn risk does **not** imply high business value — risk-ranked targeting spends
+  budget on customers who aren't worth saving.
+- CLV-weighted, profit-aware targeting yields higher efficiency with fewer interventions.
 
 ## Known limitations
 
