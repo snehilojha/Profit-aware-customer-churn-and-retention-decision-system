@@ -65,6 +65,23 @@ had gone stale against the code that produces it.
 - High churn risk does **not** imply high business value — risk-ranked targeting spends
   budget on customers who aren't worth saving.
 
+## Current model scores
+
+Concordance for the three model variants, measured on a full run of the notebook
+(75/25 split, `random_state=42`, stratified on the churn event):
+
+| Model | In-sample | Held-out |
+|---|---|---|
+| A — first model, includes `TotalCharges` (the only score the notebook reports) | 0.9027 | 0.8937 |
+| B — final model, adds `log(t)` interactions (**never scored in the notebook**) | 0.9215 | 0.9133 |
+| C — leak-free: no `TotalCharges`, no `log(t)` terms | **0.8612** | **0.8525** |
+
+**Row C is the honest number.** A and B are inflated by target leakage, and the held-out
+column shows a train/test split does not fix that — the leaked signal is inside each row,
+so it survives the split. Only removing the offending features changes the picture.
+
+Dataset: 7,043 customers, 1,869 churn events (26.5%), 5,174 right-censored.
+
 ## Known limitations
 
 These are real and not yet fixed. Read the numbers in the notebook with them in mind:
@@ -72,13 +89,15 @@ These are real and not yet fixed. Read the numbers in the notebook with them in 
 1. **Target leakage.** `TotalCharges` is approximately `MonthlyCharges x tenure`, and
    `tenure` is the survival duration (correlation 0.83). The `*_log_time` interaction
    terms multiply covariates by `log(duration)` directly. Both feed the outcome back in
-   as predictors, so the reported concordance (0.90-0.92) is inflated. Removing
-   `TotalCharges` alone drops it to **0.857**.
-2. **No train/test split.** Every metric is in-sample.
+   as predictors, so the reported concordance is inflated by roughly **0.04-0.06**
+   (see the baseline table above).
+2. **No train/test split.** Every metric in the notebook is in-sample. Note that a split
+   alone does *not* expose this leakage — the leaked signal lives inside each row, so it
+   transfers to the test set intact.
 3. **The reported C-index belongs to a discarded model.** It is measured before
    `TotalCharges` is dropped, and never recomputed for the final model.
 4. **Expected lifetime is not remaining lifetime.** `predict_expectation()` returns
-   total lifetime from t=0, unconditional on tenure already served — 1,088 customers
+   total lifetime from t=0, unconditional on tenure already served — 1,073 customers
    get an "expected lifetime" shorter than the tenure they have already completed.
    The same applies to the 3- and 6-month churn probabilities, which are measured from
    signup rather than from today. Conditional survival `S(t+k)/S(t)` is what's needed.
