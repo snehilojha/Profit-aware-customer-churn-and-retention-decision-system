@@ -28,19 +28,19 @@ This requires answering three questions:
 
 - Reframed churn as a time-to-event problem instead of binary classification
 - Modeled churn dynamics using Cox Proportional Hazards
-- Generated individual survival curves, short-term churn risk (3-6 months), and
-  expected customer lifetime
+- Scored active customers only, conditional on the tenure each has already completed:
+  churn risk over the next 3 and 6 months, and expected remaining lifetime
 
 This enables early-warning churn detection, not just retrospective prediction.
 
 **2. Forward-Looking Customer Lifetime Value (CLV)**
 
-- Estimated CLV from predicted lifetime:  `CLV = Monthly Revenue x Expected Lifetime`
+- Estimated CLV from predicted remaining lifetime:
+  `CLV = Monthly Revenue x Expected Remaining Lifetime`
 - Differentiates high-risk/low-value from high-risk/high-value customers requiring
   immediate attention
 
-*(Note: the current implementation uses total rather than remaining lifetime — see
-limitation 4 below.)*
+*(Note: remaining lifetime is capped at 72 months by the data — see limitation 1 below.)*
 
 **3. Profit-Aware Retention Decision Engine**
 
@@ -96,27 +96,36 @@ gone stale against the code that produces it.
 | Stage | Approach |
 |---|---|
 | Exploration | Kaplan-Meier survival curves segmented by contract, internet service, payment method |
-| Modeling | Cox Proportional Hazards (`lifelines`), ridge-penalized (`penalizer=0.1`) |
+| Modeling | Cox Proportional Hazards (`lifelines`), ridge-penalized (`penalizer=0.1`); no `TotalCharges`, no `log(t)` terms |
+| Evaluation | Concordance on a stratified 75/25 holdout (`random_state=42`) |
 | Diagnostics | Schoenfeld residual tests via `check_assumptions()` |
-| Valuation | CLV = Monthly Revenue x predicted lifetime |
+| Scoring | Active customers only; churn probability and lifetime conditional on current tenure (`conditional_after`) |
+| Valuation | CLV = Monthly Revenue x expected remaining lifetime |
 | Decision | Target when `(CLV x P(retention success)) - retention cost > 0` |
 
 ## Current model scores
 
-Concordance for the three model variants, measured on a full run of the notebook
-(75/25 split, `random_state=42`, stratified on the churn event):
+Concordance for three model variants, each trained and scored on the same stratified
+75/25 split (`random_state=42`). The notebook computes this table in the section
+*Model variants and the leakage check*.
 
-| Model | In-sample | Held-out |
+| Model | Train | Test |
 |---|---|---|
-| A — first model, includes `TotalCharges` (the only score the notebook reports) | 0.9027 | 0.8937 |
-| B — final model, adds `log(t)` interactions (**never scored in the notebook**) | 0.9215 | 0.9133 |
-| C — leak-free: no `TotalCharges`, no `log(t)` terms | **0.8612** | **0.8525** |
+| A — includes `TotalCharges` (the original first model) | 0.9044 | 0.8937 |
+| B — adds `log(t)` interactions (the original final model) | 0.9230 | 0.9133 |
+| C — leak-free: no `TotalCharges`, no `log(t)` terms | **0.8638** | **0.8525** |
 
-**Row C is the honest number.** A and B are inflated by target leakage, and the held-out
-column shows a train/test split does not fix that — the leaked signal is inside each row,
-so it survives the split. Only removing the offending features changes the picture.
+**Row C is the honest number, and C is the only model used for scoring.** A and B are
+inflated by target leakage: `TotalCharges` is approximately `MonthlyCharges x tenure`, and
+`tenure` is the survival duration (correlation 0.83), while the `log(t)` terms multiply
+covariates by the duration directly. The test column shows a train/test split does not
+catch this — the leaked value is inside each row, so it survives the split. Only removing
+the offending features changes the picture.
 
-Dataset: 7,043 customers, 1,869 churn events (26.5%), 5,174 right-censored.
+The final model is model C refit on all 7,043 customers; the holdout is only for
+measuring it.
+
+Dataset: 7,043 customers, 1,869 churn events (26.5%), 5,174 right-censored (still active).
 
 ## Key Findings
 
@@ -132,36 +141,30 @@ Dataset: 7,043 customers, 1,869 churn events (26.5%), 5,174 right-censored.
 
 These are real and not yet fixed. Read the numbers in the notebook with them in mind:
 
-1. **Target leakage.** `TotalCharges` is approximately `MonthlyCharges x tenure`, and
-   `tenure` is the survival duration (correlation 0.83). The `*_log_time` interaction
-   terms multiply covariates by `log(duration)` directly. Both feed the outcome back in
-   as predictors, so the reported concordance is inflated by roughly **0.04-0.06**
-   (see the baseline table above).
-2. **No train/test split.** Every metric in the notebook is in-sample. Note that a split
-   alone does *not* expose this leakage — the leaked signal lives inside each row, so it
-   transfers to the test set intact.
-3. **The reported C-index belongs to a discarded model.** It is measured before
-   `TotalCharges` is dropped, and never recomputed for the final model.
-4. **Expected lifetime is not remaining lifetime.** `predict_expectation()` returns
-   total lifetime from t=0, unconditional on tenure already served — 1,073 customers
-   get an "expected lifetime" shorter than the tenure they have already completed.
-   The same applies to the 3- and 6-month churn probabilities, which are measured from
-   signup rather than from today. Conditional survival `S(t+k)/S(t)` is what's needed.
-5. **The strategy comparison is circular.** The profit-based strategy is defined as
+1. **The data stops at 72 months of tenure.** The model has no information about churn
+   after month 72, and lifelines holds the hazard flat past that point. Expected
+   remaining lifetime is therefore a restricted mean over the next 72 months (CLV tops
+   out at `MonthlyCharges x 72`), and churn probabilities are understated for the 894
+   active customers whose 6-month window runs past month 72 — a customer at exactly
+   72 months gets 0.
+2. **The strategy comparison is circular.** The profit-based strategy is defined as
    "select everyone with `net_value > 0`" and then scored by summing `net_value`, so it
    cannot lose. A fair comparison evaluates both policies out-of-sample at equal budget.
-6. **Proportional hazards is still violated** for several covariates. The `log(t)`
-   interaction approach used here is not a valid time-varying model; `CoxTimeVaryingFitter`
-   with long-format data, or `strata=[...]` on the binary covariates, is the correct tool.
-7. **Dummy-variable trap.** One-hot encoding uses `drop_first=False`, so each categorical's
+3. **Proportional hazards is still violated** in the final model, by both `Contract`
+   levels and `PaymentMethod_Mailed check`. The notebook originally patched this with
+   `covariate x log(t)` interactions, but those leak the outcome (model B above) and have
+   been dropped. `strata=['Contract']`, or `CoxTimeVaryingFitter` with long-format data,
+   is the correct tool.
+4. **Dummy-variable trap.** One-hot encoding uses `drop_first=False`, so each categorical's
    levels sum to 1. The ridge penalty keeps the fit stable, but individual hazard ratios
    are not identifiable and should not be read as stated effects.
 
 ## Roadmap
 
-- [ ] Drop leaking features; report honest out-of-sample concordance
-- [ ] Add a train/test split
-- [ ] Switch to conditional survival for churn probabilities and remaining lifetime
+- [x] Drop leaking features; report honest out-of-sample concordance
+- [x] Add a train/test split
+- [x] Score only active customers (churned customers were previously being targeted)
+- [x] Switch to conditional survival for churn probabilities and remaining lifetime
 - [ ] Re-run the policy comparison on a holdout at fixed budget
 - [ ] Handle PH violations with stratification instead of `log(t)` interactions
 - [ ] Set `drop_first=True` to restore coefficient interpretability
